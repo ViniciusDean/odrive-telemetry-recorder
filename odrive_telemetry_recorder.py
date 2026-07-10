@@ -70,9 +70,13 @@ class Sample:
 
 def parse_report(raw: bytes | list[int], wheel_range_deg: float) -> Sample | None:
     data = bytes(raw)
-    if data and data[0] == REPORT_ID:
+    # hidapi on Windows returns the report ID, while some backends do not.
+    # Do not infer it from the first payload byte: button 1 can also be 0x01.
+    if len(data) == 31:
+        if data[0] != REPORT_ID:
+            return None
         data = data[1:]
-    if len(data) < 30:
+    elif len(data) != 30:
         return None
     position_raw = struct.unpack_from("<h", data, 8)[0]
     turns_s = struct.unpack_from("<h", data, 10)[0] / 1000.0
@@ -95,19 +99,29 @@ class HidReader(threading.Thread):
         self.range_getter = range_getter
         self.output = output
         self.stop_event = threading.Event()
+        self.opened = threading.Event()
+        self.finished = threading.Event()
         self.error: str | None = None
+        self.device = None
 
     def stop(self) -> None:
         self.stop_event.set()
+        # A close unblocks a pending native HID read, so the next session does
+        # not race the old reader for the same device handle.
+        if self.device:
+            try:
+                self.device.close()
+            except Exception:
+                pass
 
     def run(self) -> None:
-        device = None
         try:
-            device = hid.device()
-            device.open_path(self.path)
-            device.set_nonblocking(1)
+            self.device = hid.device()
+            self.device.open_path(self.path)
+            self.device.set_nonblocking(1)
+            self.opened.set()
             while not self.stop_event.is_set():
-                raw = device.read(64)
+                raw = self.device.read(64)
                 if not raw:
                     time.sleep(0.001)
                     continue
@@ -118,10 +132,15 @@ class HidReader(threading.Thread):
                     except queue.Full:
                         pass
         except Exception as exc:
-            self.error = str(exc)
+            if not self.stop_event.is_set():
+                self.error = str(exc)
         finally:
-            if device:
-                device.close()
+            if self.device:
+                try:
+                    self.device.close()
+                except Exception:
+                    pass
+            self.finished.set()
 
 
 class Session:
@@ -313,7 +332,18 @@ class App(tk.Tk):
         for index, (label, variable, unit) in enumerate(fields):
             col = index * 2
             ttk.Label(settings, text=label, style="Card.TLabel").grid(row=1, column=col, sticky="w", pady=(10, 2))
-            ttk.Entry(settings, textvariable=variable, width=11).grid(row=2, column=col, sticky="w")
+            if label == "Max torque FFB":
+                ttk.Spinbox(
+                    settings,
+                    textvariable=variable,
+                    from_=0.5,
+                    to=30.0,
+                    increment=0.5,
+                    width=11,
+                    format="%.1f",
+                ).grid(row=2, column=col, sticky="w")
+            else:
+                ttk.Entry(settings, textvariable=variable, width=11).grid(row=2, column=col, sticky="w")
             ttk.Label(settings, text=unit, style="Card.TLabel").grid(row=2, column=col + 1, sticky="w", padx=(6, 18))
         ttk.Label(settings, text="Use os valores da sua configuracao. Max torque e usado para detectar clipping de FFB; os demais afetam potencia e clipping fisico.", style="Card.TLabel").grid(row=3, column=0, columnspan=10, sticky="w", pady=(12, 0))
 
@@ -382,6 +412,9 @@ class App(tk.Tk):
         self.start_button.configure(state="normal")
 
     def start_recording(self) -> None:
+        if self.reader and self.reader.is_alive():
+            self.status_var.set("A sessao anterior ainda esta liberando o HID. Aguarde alguns instantes.")
+            return
         if not self.device_info:
             self.scan()
             if not self.device_info:
@@ -394,19 +427,60 @@ class App(tk.Tk):
         except ValueError as exc:
             messagebox.showerror("Parametro invalido", str(exc), parent=self)
             return
+        while True:
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
         self.session = Session(self.output_dir, max_torque, current, brake, phase)
         self.reader = HidReader(self.device_info["path"], self.wheel_range, self.queue)
         self.reader.start()
         self.scan_button.configure(state="disabled")
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
-        self.status_var.set("Gravando telemetria HID em CSV...")
+        self.status_var.set("Conectando ao volante...")
         self.file_var.set(f"Gravando: {self.session.path.name}")
+        self.after(50, self.await_reader_open)
+
+    def await_reader_open(self) -> None:
+        reader = self.reader
+        if not reader:
+            return
+        if reader.error:
+            self.abort_unstarted_session(f"Nao foi possivel abrir o HID: {reader.error}")
+        elif reader.opened.is_set():
+            self.status_var.set("Gravando telemetria HID em CSV...")
+        elif reader.finished.is_set():
+            self.abort_unstarted_session("O leitor HID foi encerrado antes de abrir o volante.")
+        else:
+            self.after(50, self.await_reader_open)
+
+    def abort_unstarted_session(self, message: str) -> None:
+        if self.reader:
+            self.reader.stop()
+            self.reader.join(timeout=2.0)
+        self.reader = None
+        if self.session:
+            self.session.close()
+            try:
+                if self.session.count == 0:
+                    self.session.path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self.session = None
+        self.status_var.set(message)
+        self.file_var.set("Nenhuma sessao gravada.")
+        self.scan_button.configure(state="normal")
+        self.start_button.configure(state="normal" if self.device_info else "disabled")
+        self.stop_button.configure(state="disabled")
 
     def stop_recording(self) -> None:
         if self.reader:
             self.reader.stop()
-            self.reader.join(timeout=1.0)
+            self.reader.join(timeout=2.0)
+            if self.reader.is_alive():
+                self.status_var.set("O leitor HID ainda nao encerrou. Feche e reabra o app antes de iniciar outra sessao.")
+                return
             self.reader = None
         self.drain()
         if self.session:
