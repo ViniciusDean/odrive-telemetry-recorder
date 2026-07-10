@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import ctypes
+import json
 import math
 import os
 import queue
@@ -23,6 +24,7 @@ PID = 0x0D40
 REPORT_ID = 0x01
 HISTORY_INTERVAL_S = 0.02
 MAX_HISTORY = 180_000
+SETTINGS_FILE_NAME = "odrive_telemetry_recorder_settings.json"
 
 
 def enable_windows_dpi_awareness() -> None:
@@ -257,13 +259,15 @@ class App(tk.Tk):
         self.reader: HidReader | None = None
         self.session: Session | None = None
         self.output_dir = application_directory() / "recordings"
+        self.settings_path = application_directory() / SETTINGS_FILE_NAME
+        self.settings = self.load_settings()
         self.last_render = 0.0
 
-        self.range_var = tk.StringVar(value="900")
-        self.max_torque_var = tk.StringVar(value="10")
-        self.current_var = tk.StringVar(value="20")
-        self.brake_var = tk.StringVar(value="6")
-        self.phase_var = tk.StringVar(value="0.329")
+        self.range_var = tk.StringVar(value=self.settings.get("wheel_range", "900"))
+        self.max_torque_var = tk.StringVar(value=self.settings.get("max_torque", "10"))
+        self.current_var = tk.StringVar(value=self.settings.get("current_limit", "20"))
+        self.brake_var = tk.StringVar(value=self.settings.get("brake_resistance", "6"))
+        self.phase_var = tk.StringVar(value=self.settings.get("phase_resistance", "0.329"))
         self.status_var = tk.StringVar(value="Desconectado. Clique em Procurar volante.")
         self.file_var = tk.StringVar(value="Nenhuma sessao gravada.")
         self.values = {key: tk.StringVar(value="--") for key in (
@@ -393,6 +397,33 @@ class App(tk.Tk):
             raise ValueError(f"{label} deve ser maior que zero.")
         return result
 
+    def load_settings(self) -> dict[str, str]:
+        try:
+            settings = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            if isinstance(settings, dict):
+                return {key: str(value) for key, value in settings.items()}
+        except (OSError, json.JSONDecodeError):
+            pass
+        return {}
+
+    def save_settings(self) -> None:
+        settings = {
+            "wheel_range": self.range_var.get().strip(),
+            "max_torque": self.max_torque_var.get().strip(),
+            "current_limit": self.current_var.get().strip(),
+            "brake_resistance": self.brake_var.get().strip(),
+            "phase_resistance": self.phase_var.get().strip(),
+        }
+        temporary_path = self.settings_path.with_suffix(".tmp")
+        try:
+            temporary_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+            temporary_path.replace(self.settings_path)
+        except OSError:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def wheel_range(self) -> float:
         try:
             return self.number(self.range_var, "Range")
@@ -427,6 +458,7 @@ class App(tk.Tk):
         except ValueError as exc:
             messagebox.showerror("Parametro invalido", str(exc), parent=self)
             return
+        self.save_settings()
         while True:
             try:
                 self.queue.get_nowait()
@@ -581,6 +613,7 @@ class App(tk.Tk):
         os.startfile(self.output_dir)
 
     def on_close(self) -> None:
+        self.save_settings()
         if self.reader:
             self.stop_recording()
         self.destroy()
