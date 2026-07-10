@@ -337,14 +337,25 @@ class App(tk.Tk):
             col = index * 2
             ttk.Label(settings, text=label, style="Card.TLabel").grid(row=1, column=col, sticky="w", pady=(10, 2))
             if label == "Max torque FFB":
-                ttk.Spinbox(
+                tk.Spinbox(
                     settings,
                     textvariable=variable,
                     from_=0.5,
                     to=30.0,
                     increment=0.5,
-                    width=11,
-                    format="%.1f",
+                    width=10,
+                    background="#0d1118",
+                    foreground="#e7edf5",
+                    buttonbackground="#252e3d",
+                    insertbackground="#e7edf5",
+                    selectbackground="#635bff",
+                    selectforeground="#ffffff",
+                    highlightthickness=1,
+                    highlightbackground="#e7edf5",
+                    highlightcolor="#635bff",
+                    relief="solid",
+                    borderwidth=1,
+                    font=("Segoe UI", 10),
                 ).grid(row=2, column=col, sticky="w")
             else:
                 ttk.Entry(settings, textvariable=variable, width=11).grid(row=2, column=col, sticky="w")
