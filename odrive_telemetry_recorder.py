@@ -49,6 +49,13 @@ def enable_windows_dpi_awareness() -> None:
 enable_windows_dpi_awareness()
 
 
+def application_directory() -> Path:
+    """Use the executable folder when packaged, never PyInstaller's temp folder."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
 @dataclass(frozen=True)
 class Sample:
     t: float
@@ -230,7 +237,7 @@ class App(tk.Tk):
         self.device_info: dict | None = None
         self.reader: HidReader | None = None
         self.session: Session | None = None
-        self.output_dir = Path(__file__).resolve().parent / "recordings"
+        self.output_dir = application_directory() / "recordings"
         self.last_render = 0.0
 
         self.range_var = tk.StringVar(value="900")
@@ -291,6 +298,7 @@ class App(tk.Tk):
         self.start_button.grid(row=0, column=1, padx=(0, 8))
         self.stop_button = ttk.Button(controls, text="Parar e analisar", command=self.stop_recording, state="disabled")
         self.stop_button.grid(row=0, column=2)
+        ttk.Button(controls, text="Abrir CSVs", command=self.open_folder).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
         settings = self.card(root)
         settings.grid(row=1, column=0, sticky="ew", pady=(12, 0))
@@ -404,7 +412,7 @@ class App(tk.Tk):
         if self.session:
             self.session.close()
             summary_path = self.session.write_summary()
-            self.status_var.set("Sessao finalizada. O CSV contem todas as amostras recebidas.")
+            self.status_var.set(f"Sessao finalizada. CSVs salvos em: {self.output_dir}")
             self.file_var.set(f"CSVs salvos: {self.session.path.name} e {summary_path.name}")
         self.scan_button.configure(state="normal")
         self.start_button.configure(state="normal" if self.device_info else "disabled")

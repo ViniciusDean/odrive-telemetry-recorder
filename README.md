@@ -12,7 +12,7 @@ Baseado no protocolo de telemetria exposto pelo projeto principal [eagabriel/Odr
 4. Confira range, current limit, resistor de freio e resistencia de fase.
 5. Clique em Iniciar gravacao, rode a sessao e clique em Parar e analisar.
 
-O CSV bruto e salvo em recordings com todas as amostras HID recebidas. Um segundo CSV de resumo contem os minimos, maximos, clipping de FFB pelo max torque configurado e clipping fisico por corrente.
+Os CSVs sao salvos na pasta recordings ao lado do executavel, nunca em pasta temporaria. O CSV bruto contem todas as amostras HID; o CSV de resumo contem os minimos, maximos, clipping de FFB pelo max torque configurado e clipping fisico por corrente.
 
 ## Gerar executavel
 
